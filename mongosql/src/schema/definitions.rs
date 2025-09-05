@@ -2158,12 +2158,12 @@ impl Document {
                 Document::update_jaccard_index(jaccard_index, union.len(), intersection_size);
 
             // as the number of unions grows, this number will become smaller and smaller
-            let stabilization_rate = 1.0 / jaccard_index.num_unions as f64;
-            if jaccard_index.num_unions >= 5
-                && (jaccard_index.avg_ji + stabilization_rate) < jaccard_index.stability_limit
-            {
-                Document::any()
-            } else {
+            //let stabilization_rate = 1.0 / jaccard_index.num_unions as f64;
+            // if jaccard_index.num_unions >= 5
+            //     && (jaccard_index.avg_ji + stabilization_rate) < jaccard_index.stability_limit
+            // {
+            //     Document::any()
+            // } else {
                 Document {
                     keys: union,
                     required: self
@@ -2175,7 +2175,7 @@ impl Document {
                         || other.additional_properties,
                     jaccard_index: Some(jaccard_index),
                 }
-            }
+            //}
         } else {
             Document {
                 keys: Document::union_keys(self.keys, other.keys),
