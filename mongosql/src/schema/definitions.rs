@@ -496,7 +496,7 @@ impl Default for JaccardIndex {
         JaccardIndex {
             avg_ji: 1.0,
             num_unions: 0,
-            stability_limit: 0.8,
+            stability_limit: 0.0,
         }
     }
 }
