@@ -192,17 +192,67 @@ impl HigherOrderFunctionsAliasVisitor {
         ))
     }
 
-    /// Rewrite `ARRAY_REMOVE(a, x)` into `FILTER(a, this <> x)`.
+    /// Rewrite `ARRAY_REMOVE(a, x)` into
+    /// `FILTER(a, NOT (this IS NULL AND x IS NULL) AND (this IS NULL OR x IS NULL OR this <> x))`.
+    ///
+    /// Example:
+    /// ```sql
+    /// SELECT VALUE {'v': ARRAY_REMOVE(a, x)} FROM my_collection
+    /// ```
+    ///
+    /// | row                          | `v`         |
+    /// |------------------------------|-------------|
+    /// | `{a: [1, null, 3], x: 1}`    | `[null, 3]` |
+    /// | `{a: [1, null, 3], x: null}` | `[1, 3]`    |
+    ///
+    /// Writing `A` for `this IS NULL` and `B` for `x IS NULL`, the predicate decides the second
+    /// row element by element as:
+    ///
+    /// | `this` | `x`  | `NOT (A AND B)` | `A OR B OR this <> x` | result |
+    /// |--------|------|-----------------|-----------------------|--------|
+    /// | 1      | NULL | true            | true (via `B`)        | keep   |
+    /// | NULL   | NULL | false           | true (via `A`)        | drop   |
+    /// | 3      | NULL | true            | true (via `B`)        | keep   |
+    ///
     fn rewrite_array_remove(args: &[Expression]) -> Result<Expression> {
         let [array, remove_expr] = try_exact_args("ARRAY_REMOVE", args)?;
 
+        let is_null = |expr: Expression| {
+            Expression::Is(IsExpr {
+                expr: Box::new(expr),
+                target_type: TypeOrMissing::Type(Type::Null),
+            })
+        };
+
+        // NOT (this IS NULL AND x IS NULL): drop the element when both sides are NULL.
+        let not_both_null = Expression::Unary(UnaryExpr {
+            op: UnaryOp::Not,
+            expr: Box::new(Self::make_binary(
+                is_null(this()),
+                BinaryOp::And,
+                is_null(remove_expr.clone()),
+            )),
+        });
+
+        // this IS NULL OR x IS NULL OR this <> x: keep the element when exactly one side is
+        // NULL, and otherwise defer to `<>` on two non-NULL operands.
+        let either_null_or_unequal = Self::make_binary(
+            is_null(this()),
+            BinaryOp::Or,
+            Self::make_binary(
+                is_null(remove_expr.clone()),
+                BinaryOp::Or,
+                Self::make_binary(
+                    this(),
+                    BinaryOp::Comparison(ComparisonOp::Neq),
+                    remove_expr.clone(),
+                ),
+            ),
+        );
+
         Ok(Self::make_filter(
             array.clone(),
-            Self::make_binary(
-                this(),
-                BinaryOp::Comparison(ComparisonOp::Neq),
-                remove_expr.clone(),
-            ),
+            Self::make_binary(not_both_null, BinaryOp::And, either_null_or_unequal),
         ))
     }
 

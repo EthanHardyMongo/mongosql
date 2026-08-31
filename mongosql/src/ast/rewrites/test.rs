@@ -1486,7 +1486,7 @@ mod higher_order_functions {
     test_rewrite!(
         array_remove,
         pass = HigherOrderFunctionsRewritePass,
-        expected = Ok("SELECT FILTER(a, this <> x)"),
+        expected = Ok("SELECT FILTER(a, NOT (this IS NULL AND x IS NULL) AND (this IS NULL OR (x IS NULL OR this <> x)))"),
         input = "SELECT ARRAY_REMOVE(a, x)",
     );
 
