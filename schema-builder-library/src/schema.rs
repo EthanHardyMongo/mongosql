@@ -125,7 +125,10 @@ pub async fn derive_schema_for_partition<S: LocalDataService>(
             .map_err(Error::DataServiceError)?;
 
         let mut no_result = true;
-        let mut iter_schema = Schema::Unsat;
+
+        // Everything derived so far, including the documents seen in this iteration.
+        // `schema` is moved here and restored below, before it is read again.
+        let mut combined = schema;
         let mut cursor = Box::pin(cursor);
         while let Some(doc) = cursor.try_next().await.map_err(Error::DataServiceError)? {
             info!(db, collection, "processing partition {partition_ix}");
@@ -141,27 +144,32 @@ pub async fn derive_schema_for_partition<S: LocalDataService>(
                 // getting caught in an infinite loop, we push to a list of ignored IDs in the
                 // event empty keys or field names containing a `.` exists in the partition.
                 //
-                // Note that the comparison must be against the accumulated `schema`, not against
-                // `iter_schema` alone: `iter_schema` restarts at `Unsat` on every iteration, so
-                // comparing against it would never ignore the first document of a batch, and a
-                // batch holding exactly one such document would loop forever.
-                let old_schema = schema.union(&iter_schema);
-                iter_schema = iter_schema.union(&schema_for_document(&doc));
+                // Note that the comparison must be against everything derived so far, not
+                // against this iteration's documents alone: a per-iteration schema would restart
+                // at `Unsat` every time, so the first document of a batch would always appear to
+                // add information and would never be ignored, and a batch holding exactly one
+                // such document would loop forever.
+                let widened = combined.union(&schema_for_document(&doc));
 
-                if old_schema == schema.union(&iter_schema) {
+                if widened == combined {
                     ignored_ids.push(id.clone());
+                } else {
+                    combined = widened;
                 }
                 no_result = false;
             } else {
-                warn!(db, collection, "document {partition_key} field");
+                warn!(
+                    db,
+                    collection, "document is missing the {partition_key} field"
+                );
                 continue;
             };
         }
+        schema = combined;
+
         if no_result {
             break;
         }
-
-        schema = schema.union(&iter_schema);
 
         // If the schema for this partition becomes unstable, we should do at most one more
         // iteration to see if we detect any additional properties. After two iterations with an

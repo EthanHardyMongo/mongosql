@@ -8,6 +8,8 @@
 
 use crate::{derive_schema_for_collection, internal_integration_tests::create_mdb_client};
 use bson::{Document, doc};
+use mongosql::schema::Schema;
+use schema_derivation::schema_for_document;
 use std::time::Duration;
 
 const DB_NAME: &str = "dotted_field_regression";
@@ -16,8 +18,18 @@ const DB_NAME: &str = "dotted_field_regression";
 /// tiny documents; exceeding it means the derivation loop is not terminating.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Asserts that deriving a schema for a collection holding `docs` terminates, and
+/// that the derived schema is the union of the schemas of every document -- i.e.
+/// that nothing was dropped. The latter matters because documents that cannot match
+/// their own `$jsonSchema` are only ever added to `ignored_ids` *after* their
+/// contribution has been folded into the accumulated schema; a fix that simply bailed
+/// out of the loop would terminate but lose information.
 #[allow(clippy::unwrap_used)]
 async fn assert_derivation_terminates(coll_name: &str, docs: Vec<Document>) {
+    let expected = docs.iter().fold(Schema::Unsat, |acc, doc| {
+        acc.union(&schema_for_document(doc))
+    });
+
     let client = create_mdb_client().await;
     let db = client.database(DB_NAME);
     let coll = db.collection::<Document>(coll_name);
@@ -38,7 +50,10 @@ async fn assert_derivation_terminates(coll_name: &str, docs: Vec<Document>) {
             "derive_schema_for_collection did not terminate within {TIMEOUT:?} for `{DB_NAME}.{coll_name}`"
         ),
         Ok(Err(err)) => panic!("unexpected error: {err:?}"),
-        Ok(Ok(_)) => {}
+        Ok(Ok(actual)) => assert_eq!(
+            expected, actual,
+            "derived schema for `{DB_NAME}.{coll_name}` does not match the union of its documents"
+        ),
     }
 }
 
