@@ -131,20 +131,16 @@ pub async fn derive_schema_for_partition<S: LocalDataService>(
             info!(db, collection, "processing partition {partition_ix}");
             if let Some(id) = doc.get(partition_key) {
                 partition.min = id.clone();
+
                 // Some documents cannot match a $jsonSchema derived from themselves, and so are
                 // returned by the query above no matter how much schema we have accumulated. The
                 // known cases are field names containing a `.`, which $jsonSchema's `required`
-                // keyword resolves as a path rather than as a literal name, and empty field names
-                // on older servers. To avoid getting caught in an infinite loop, we push such
-                // documents onto a list of ignored IDs.
-                //
-                // Note that the comparison must be against the accumulated `schema`, not against
-                // `iter_schema` alone: `iter_schema` restarts at `Unsat` on every iteration, so
-                // comparing against it would never ignore the first document of a batch, and a
-                // batch holding exactly one such document would loop forever.
-                //
-                // See SERVER-92443, HELP-98418, HELP-98824, and
-                // https://github.com/10gen/schema-manager-rs/pull/754 for more context.
+                // keyword resolves as a path rather than as a literal name, and empty keys on
+                // older servers due to a bug. See SERVER-92443 and
+                // https://github.com/10gen/schema-manager-rs/pull/754 for more context. To avoid
+                // getting caught in an infinite loop, we push to a list of ignored IDs in the
+                // event empty keys or field names containing a `.` exists in the partition.
+
                 let old_schema = schema.union(&iter_schema);
                 iter_schema = iter_schema.union(&schema_for_document(&doc));
 

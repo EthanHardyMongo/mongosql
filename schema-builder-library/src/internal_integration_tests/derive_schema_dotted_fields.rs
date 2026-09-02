@@ -5,8 +5,6 @@
 //! absent, so the constraint can never be satisfied. Such a document is therefore
 //! always returned by the exclusion query in `derive_schema_for_partition`, and the
 //! derivation loop can spin forever on it.
-//!
-//! See HELP-98418 and HELP-98824.
 
 use crate::{derive_schema_for_collection, internal_integration_tests::create_mdb_client};
 use bson::{Document, doc};
