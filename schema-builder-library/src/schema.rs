@@ -140,7 +140,11 @@ pub async fn derive_schema_for_partition<S: LocalDataService>(
                 // https://github.com/10gen/schema-manager-rs/pull/754 for more context. To avoid
                 // getting caught in an infinite loop, we push to a list of ignored IDs in the
                 // event empty keys or field names containing a `.` exists in the partition.
-
+                //
+                // Note that the comparison must be against the accumulated `schema`, not against
+                // `iter_schema` alone: `iter_schema` restarts at `Unsat` on every iteration, so
+                // comparing against it would never ignore the first document of a batch, and a
+                // batch holding exactly one such document would loop forever.
                 let old_schema = schema.union(&iter_schema);
                 iter_schema = iter_schema.union(&schema_for_document(&doc));
 
