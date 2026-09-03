@@ -7,6 +7,10 @@ mod derive_schema_dotted_fields;
 
 #[cfg(feature = "integration")]
 #[cfg(test)]
+mod derive_schema_heterogeneous;
+
+#[cfg(feature = "integration")]
+#[cfg(test)]
 mod get_bounds;
 
 #[cfg(feature = "integration")]

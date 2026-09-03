@@ -97,15 +97,22 @@ pub async fn derive_schema_for_partition<S: LocalDataService>(
         .unwrap_or(Schema::Unsat);
 
     let mut saw_unstable = false;
+    let mut schema_match_doc: Option<Document> = None;
+    let mut schema_changed = true;
 
     loop {
         info!(db, collection, "querying partition: {partition_ix}");
 
-        // This is a somewhat expensive clone, but there isn't a try_from for
-        // a schema reference :(
-        let doc = (schema != Schema::Unsat)
-            .then(|| bson::Document::try_from(schema.clone()))
-            .transpose()?;
+        // Converting the accumulated schema is expensive (there is no try_from for a
+        // schema reference, so it clones), and the result only changes when `schema`
+        // does -- which it stops doing once the partition's shapes are all known. Cache
+        // the converted document and rebuild it only after `schema` actually widens.
+        if schema_changed {
+            schema_match_doc = (schema != Schema::Unsat)
+                .then(|| bson::Document::try_from(schema.clone()))
+                .transpose()?;
+        }
+        let doc = schema_match_doc.clone();
 
         let pipeline = vec![
             partition.generate_match(doc, &ignored_ids, partition_key),
@@ -125,10 +132,11 @@ pub async fn derive_schema_for_partition<S: LocalDataService>(
             .map_err(Error::DataServiceError)?;
 
         let mut no_result = true;
-
-        // Everything derived so far, including the documents seen in this iteration.
-        // `schema` is moved here and restored below, before it is read again.
-        let mut combined = schema;
+        let mut iter_schema = Schema::Unsat;
+        // Carried across documents: the value of `schema.union(&iter_schema)` as of the
+        // previous document. Neither operand changes between the end of one document's
+        // check and the start of the next, so it can be reused instead of recomputed.
+        let mut old_schema = schema.union(&iter_schema);
         let mut cursor = Box::pin(cursor);
         while let Some(doc) = cursor.try_next().await.map_err(Error::DataServiceError)? {
             info!(db, collection, "processing partition {partition_ix}");
@@ -144,18 +152,17 @@ pub async fn derive_schema_for_partition<S: LocalDataService>(
                 // getting caught in an infinite loop, we push to a list of ignored IDs in the
                 // event empty keys or field names containing a `.` exists in the partition.
                 //
-                // Note that the comparison must be against everything derived so far, not
-                // against this iteration's documents alone: a per-iteration schema would restart
-                // at `Unsat` every time, so the first document of a batch would always appear to
-                // add information and would never be ignored, and a batch holding exactly one
-                // such document would loop forever.
-                let widened = combined.union(&schema_for_document(&doc));
+                // Note that the comparison must be against the accumulated `schema`, not against
+                // `iter_schema` alone: `iter_schema` restarts at `Unsat` on every iteration, so
+                // comparing against it would never ignore the first document of a batch, and a
+                // batch holding exactly one such document would loop forever.
+                iter_schema = iter_schema.union(&schema_for_document(&doc));
+                let new_schema = schema.union(&iter_schema);
 
-                if widened == combined {
+                if old_schema == new_schema {
                     ignored_ids.push(id.clone());
-                } else {
-                    combined = widened;
                 }
+                old_schema = new_schema;
                 no_result = false;
             } else {
                 warn!(
@@ -165,11 +172,22 @@ pub async fn derive_schema_for_partition<S: LocalDataService>(
                 continue;
             };
         }
-        schema = combined;
+        // Documents are processed in `partition_key` order and `partition.min` advances to
+        // the last one seen, so every ignored id below the minimum is already excluded by the
+        // `$gte` bound in the match. Only ids at the minimum itself still need to be listed.
+        // Without this, `ignored_ids` -- and the `$nin` array resent on every subsequent
+        // query for this partition -- grows without bound.
+        ignored_ids.retain(|id| *id == partition.min);
 
         if no_result {
             break;
         }
+
+        // `old_schema` already holds `schema.union(&iter_schema)` as of the last document,
+        // produced by the same call on the same operands, so reuse it rather than
+        // recomputing the union.
+        schema_changed = old_schema != schema;
+        schema = old_schema;
 
         // If the schema for this partition becomes unstable, we should do at most one more
         // iteration to see if we detect any additional properties. After two iterations with an
