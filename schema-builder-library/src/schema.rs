@@ -128,7 +128,12 @@ pub async fn derive_schema_for_partition<S: LocalDataService>(
         let mut iter_schema = Schema::Unsat;
         let mut cursor = Box::pin(cursor);
         while let Some(doc) = cursor.try_next().await.map_err(Error::DataServiceError)? {
-            info!(db, collection, "processing partition {partition_ix}");
+            info!(
+                db,
+                collection,
+                "processing partition {partition_ix}, {partition_key} = {}",
+                doc.get(partition_key).unwrap_or(&bson::Bson::Null)
+            );
             if let Some(id) = doc.get(partition_key) {
                 partition.min = id.clone();
                 let old_schema = iter_schema.clone();
